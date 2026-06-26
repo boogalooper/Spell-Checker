@@ -614,8 +614,8 @@ function normalizeDictionaryWord(word) {
     return String(word || '')
         .replace(/^\uFEFF/, '')
         .replace(/^\s+|\s+$/g, '')
-        .replace(/\r]/g, '')
-        .replace(/\n]/g, '')
+        .replace(/\r/g, '')
+        .replace(/\n/g, '')
         .toLowerCase();
 }
 
@@ -673,7 +673,14 @@ function Locale() {
     this.findTextLayersHistory = { ru: 'Поиск текстовых слоев', en: 'Find text layers' };
     this.dialogTitle = { ru: 'Проверка орфографии', en: 'Spell Checker' };
     this.done = { ru: 'Готово', en: 'Done' };
-    this.goToFragment = { ru: 'Перейти к фрагменту', en: 'Go to fragment' };
+    this.goToFragment = { ru: 'Перейти к фрагменту для ручного редактирования', en: 'Go to fragment for manual editing' };
+    this.applyCorrection = { ru: 'Заменить слово на предложенный вариант', en: 'Replace the word with the suggested correction' };
+    this.manualEditButtonHint = { ru: 'Перейти к текстовому слою и включить ручное редактирование', en: 'Go to the text layer and enable manual editing' };
+    this.noSuggestion = { ru: 'Для этого слова нет предложенного исправления.', en: 'There is no suggested correction for this word.' };
+    this.correctionNotFound = { ru: 'Не удалось найти слово в выбранном текстовом слое:', en: 'Could not find the word in the selected text layer:' };
+    this.correctionApplied = { ru: 'Исправлено:', en: 'Corrected:' };
+    this.correctionError = { ru: 'Не удалось применить исправление.', en: 'Could not apply the correction.' };
+    this.applyCorrectionHistory = { ru: 'Исправление орфографии', en: 'Spell correction' };
     this.dictionaryButtonHint = { ru: 'Добавить слово в пользовательский словарь', en: 'Add word to the user dictionary' };
     this.dictionaryButtonAddedHint = { ru: 'Слово уже добавлено в пользовательский словарь', en: 'The word has already been added to the user dictionary' };
     this.dictionaryTitle = { ru: 'Пользовательский словарь', en: 'User dictionary' };
@@ -744,11 +751,16 @@ function dialog(UUID) {
 
         var word = group.add('button');
         word.preferredSize.width = 350;
-        word.helpTip = toLocaleString(str.goToFragment);
+        word.helpTip = toLocaleString(str.applyCorrection);
+
+        var edit = group.add('button');
+        edit.text = '✎';
+        edit.preferredSize = [24, 20];
+        edit.helpTip = toLocaleString(str.manualEditButtonHint);
 
         var add = group.add('button');
         add.text = '📖';
-        add.preferredSize = [20, 20];
+        add.preferredSize = [24, 20];
         add.helpTip = toLocaleString(str.dictionaryButtonHint);
 
         add.onClick = function () {
@@ -762,12 +774,12 @@ function dialog(UUID) {
                 }
 
                 if (dictionaryResult.exists) {
-                    message = toLocaleString(str.dictionaryWordAlreadyExists)
+                    message = toLocaleString(str.dictionaryWordAlreadyExists);
                 } else {
-                    message = toLocaleString(str.dictionaryWordAdded)
+                    message = toLocaleString(str.dictionaryWordAdded);
                 }
 
-                alert(message, toLocaleString(str.dictionaryTitle), false);
+                alert(message + '\n\n' + dictionaryResult.word, toLocaleString(str.dictionaryTitle), false);
 
                 add.enabled = false;
                 add.helpTip = toLocaleString(str.dictionaryButtonAddedHint);
@@ -782,52 +794,284 @@ function dialog(UUID) {
         word.onClick = function () {
             renew(cur, w.count, count);
 
-            var fragment = w.fragments[cur - 1];
+            if (!w.suggestion) {
+                alert(toLocaleString(str.noSuggestion), toLocaleString(str.errTitle), true);
+                cur = nextIndex(cur, w.count);
+                return;
+            }
 
-            select(s2t('document'), Number(fragment.parent));
+            try {
+                var target = goToFragment(w, cur, false);
 
-            if (fragment.path.length) {
-                for (var i = 0; i < fragment.path.length; i++) {
-                    select(s2t('layer'), Number(fragment.path[i]));
-                    executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO);
+                if (!target || !target.id) {
+                    alert(toLocaleString(str.correctionNotFound) + '\n\n' + w.word, toLocaleString(str.errTitle), true);
+                    cur = nextIndex(cur, w.count);
+                    return;
                 }
+
+                var correctionResult = replaceWordInTextLayer(target.id, w.word, w.suggestion);
+
+                if (!correctionResult || !correctionResult.replaced) {
+                    alert(toLocaleString(str.correctionNotFound) + '\n\n' + w.word, toLocaleString(str.errTitle), true);
+                } else {
+                    activeView(target.id, 0.7);
+                }
+            } catch (e) {
+                alert(e && e.message ? e.message : e, toLocaleString(str.correctionError), true);
             }
 
-            var id = null;
+            cur = nextIndex(cur, w.count);
+        };
 
-            if (fragment.path.length == 0) {
-                id = Number(fragment.id);
-                select(s2t('layer'), id);
-            } else {
-                id = findTextLayer(w.word);
+        edit.onClick = function () {
+            renew(cur, w.count, count);
+
+            try {
+                goToFragment(w, cur, true);
+            } catch (e) {
+                alert(e && e.message ? e.message : e, toLocaleString(str.errTitle), true);
             }
 
-            if (id) {
-                activeView(id, 0.7);
-            }
-
-            cur++;
-
-            if (cur > Number(w.count)) {
-                cur = 1;
-            }
-
-            currentTool = 'typeCreateOrEditTool';
+            cur = nextIndex(cur, w.count);
         };
 
         function renew(cur, total, text) {
             text.text = cur + '/' + total;
         }
+    }
 
-        function select(target, id) {
-            var ref = new ActionReference();
-            ref.putIdentifier(target, id);
+    function nextIndex(cur, total) {
+        cur++;
 
-            var desc = new ActionDescriptor();
-            desc.putReference(s2t('target'), ref);
-
-            executeAction(s2t('select'), desc, DialogModes.NO);
+        if (cur > Number(total)) {
+            cur = 1;
         }
+
+        return cur;
+    }
+
+    function goToFragment(w, cur, manualEdit) {
+        var fragment = w.fragments[cur - 1];
+
+        select(s2t('document'), Number(fragment.parent));
+
+        if (fragment.path.length) {
+            for (var i = 0; i < fragment.path.length; i++) {
+                select(s2t('layer'), Number(fragment.path[i]));
+                executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO);
+            }
+        }
+
+        var id = null;
+
+        if (fragment.path.length == 0) {
+            id = Number(fragment.id);
+            select(s2t('layer'), id);
+        } else {
+            id = findTextLayer(w.word);
+
+            if (id) {
+                select(s2t('layer'), id);
+            }
+        }
+
+        if (id) {
+            activeView(id, 0.7);
+        }
+
+        if (manualEdit) {
+            currentTool = 'typeCreateOrEditTool';
+        }
+
+        return { id: id, fragment: fragment };
+    }
+
+    function select(target, id) {
+        var ref = new ActionReference();
+        ref.putIdentifier(target, id);
+
+        var desc = new ActionDescriptor();
+        desc.putReference(s2t('target'), ref);
+
+        executeAction(s2t('select'), desc, DialogModes.NO);
+    }
+
+    function replaceWordInTextLayer(layerID, searchText, replacementText) {
+        layerID = Number(layerID);
+        searchText = String(searchText || '');
+        replacementText = String(replacementText || '');
+
+        if (!layerID || !searchText || !replacementText) {
+            return { replaced: false };
+        }
+
+        var textKeyID = s2t('textKey'),
+            layerIDKey = s2t('layer'),
+            ref = new ActionReference();
+
+        ref.putProperty(s2t('property'), textKeyID);
+        ref.putIdentifier(layerIDKey, layerID);
+
+        var layerDesc = executeActionGet(ref);
+
+        if (!layerDesc.hasKey(textKeyID)) {
+            return { replaced: false };
+        }
+
+        var textDesc = layerDesc.getObjectValue(textKeyID),
+            originalText = textDesc.getString(textKeyID),
+            start = originalText.indexOf(searchText);
+
+        if (start < 0) {
+            return { replaced: false };
+        }
+
+        var end = start + searchText.length,
+            newText = originalText.substring(0, start) + replacementText + originalText.substring(end),
+            delta = replacementText.length - searchText.length;
+
+        rebuildTextRanges(textDesc, originalText, start, end, replacementText.length, delta);
+        textDesc.putString(textKeyID, newText);
+
+        var setRef = new ActionReference();
+        setRef.putIdentifier(layerIDKey, layerID);
+
+        var setDesc = new ActionDescriptor();
+        setDesc.putReference(s2t('null'), setRef);
+        setDesc.putObject(s2t('to'), s2t('textLayer'), textDesc);
+
+        executeAction(s2t('set'), setDesc, DialogModes.NO);
+
+        return { replaced: true, text: newText };
+    }
+
+    function rebuildTextRanges(textDesc, originalText, start, end, replacementLength, delta) {
+        rebuildRangeList(textDesc, 'textStyleRange', 'textStyleRange', 'textStyle', originalText.length, start, end, replacementLength, delta);
+        rebuildRangeList(textDesc, 'paragraphStyleRange', 'paragraphStyleRange', 'paragraphStyle', originalText.length, start, end, replacementLength, delta);
+    }
+
+    function rebuildRangeList(textDesc, listKeyName, rangeTypeName, styleKeyName, originalLength, start, end, replacementLength, delta) {
+        var listKey = s2t(listKeyName);
+
+        if (!textDesc.hasKey(listKey)) {
+            return;
+        }
+
+        var sourceList = textDesc.getList(listKey);
+
+        if (!sourceList || !sourceList.count) {
+            return;
+        }
+
+        var fromKey = s2t('from'),
+            toKey = s2t('to'),
+            styleKey = s2t(styleKeyName),
+            maxTo = originalLength,
+            i;
+
+        for (i = 0; i < sourceList.count; i++) {
+            var sourceRangeForLimit = sourceList.getObjectValue(i);
+
+            if (sourceRangeForLimit.hasKey(toKey)) {
+                maxTo = Math.max(maxTo, sourceRangeForLimit.getInteger(toKey));
+            }
+        }
+
+        var oldLimit = Math.max(0, maxTo),
+            newLimit = Math.max(0, oldLimit + delta),
+            sourceStyles = [],
+            defaultStyle = null;
+
+        for (i = 0; i < sourceList.count; i++) {
+            var sourceRange = sourceList.getObjectValue(i),
+                from = sourceRange.hasKey(fromKey) ? sourceRange.getInteger(fromKey) : 0,
+                to = sourceRange.hasKey(toKey) ? sourceRange.getInteger(toKey) : 0,
+                style = sourceRange.hasKey(styleKey) ? sourceRange.getObjectValue(styleKey) : null;
+
+            if (!style) {
+                continue;
+            }
+
+            if (!defaultStyle) {
+                defaultStyle = style;
+            }
+
+            from = Math.max(0, Math.min(oldLimit, from));
+            to = Math.max(from, Math.min(oldLimit, to));
+
+            for (var pos = from; pos < to; pos++) {
+                sourceStyles[pos] = { index: i, style: style };
+            }
+        }
+
+        if (!defaultStyle) {
+            return;
+        }
+
+        for (i = 0; i < oldLimit; i++) {
+            if (!sourceStyles[i]) {
+                sourceStyles[i] = { index: -1, style: defaultStyle };
+            }
+        }
+
+        var newStyles = [];
+
+        for (i = 0; i < newLimit; i++) {
+            var sourcePos = getSourceStylePosition(i, start, end, replacementLength, delta, oldLimit);
+            newStyles[i] = sourceStyles[sourcePos] || { index: -1, style: defaultStyle };
+        }
+
+        var rebuiltList = new ActionList();
+
+        if (!newLimit) {
+            textDesc.putList(listKey, rebuiltList);
+            return;
+        }
+
+        var rangeStart = 0,
+            current = newStyles[0];
+
+        for (i = 1; i <= newLimit; i++) {
+            if (i == newLimit || !sameStyleRef(current, newStyles[i])) {
+                var rangeDesc = new ActionDescriptor();
+                rangeDesc.putInteger(fromKey, rangeStart);
+                rangeDesc.putInteger(toKey, i);
+                rangeDesc.putObject(styleKey, s2t(styleKeyName), current.style);
+                rebuiltList.putObject(s2t(rangeTypeName), rangeDesc);
+
+                rangeStart = i;
+                current = newStyles[i];
+            }
+        }
+
+        textDesc.putList(listKey, rebuiltList);
+    }
+
+    function getSourceStylePosition(newPos, start, end, replacementLength, delta, oldLimit) {
+        var searchLength = Math.max(1, end - start),
+            sourcePos;
+
+        if (newPos < start) {
+            sourcePos = newPos;
+        } else if (newPos < start + replacementLength) {
+            sourcePos = start + Math.min(newPos - start, searchLength - 1);
+        } else {
+            sourcePos = newPos - delta;
+        }
+
+        if (oldLimit <= 0) {
+            return 0;
+        }
+
+        return Math.max(0, Math.min(oldLimit - 1, sourcePos));
+    }
+
+    function sameStyleRef(a, b) {
+        if (!a || !b) {
+            return false;
+        }
+
+        return a.index == b.index;
     }
 
     function activeView(layerID, zoom, returnScreenCoordinates) {
