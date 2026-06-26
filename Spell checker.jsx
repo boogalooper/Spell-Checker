@@ -1,27 +1,47 @@
 ﻿#target photoshop
-
-const ver = 0.0,
+/*
+// BEGIN__HARVEST_EXCEPTION_ZSTRING
+<javascriptresource>
+<name>Spell checker</name>
+<category>jazzy</category>
+<enableinfo>true</enableinfo>
+</javascriptresource>
+// END__HARVEST_EXCEPTION_ZSTRING
+*/
+const ver = 0.1,
     UUID = 'c2007b83-5e0f-4d8f-8862-77b28358de34',
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6410,
     API_PORT_LISTEN = 6411,
     API_FILE = 'spell-checker',
+    USER_DICTIONARY_FILE = 'spell-checker-user-dictionary.txt',
     INIT_DELAY = 15000,
     DETECTION_DELAY = 2000,
     PROGRESS_DELAY = 2500,
     PING_DELAY = 100,
     EXPAND_SMART_OBJECTS = true;
+
 var fd = new pyApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     s2t = stringIDToTypeID,
     apl = new AM('application'),
     doc = new AM('document'),
     lr = new AM('layer'),
     str = new Locale();
+
 isCancelled = false;
+
 $.localize = true;
-//try {
-if (apl.getProperty('numberOfDocuments')) main()
-//} catch (e) { alert(e, 'Error', true) }
+
+try {
+    if (apl.getProperty('numberOfDocuments')) {
+        main();
+    } else {
+        alert(toLocaleString(str.noOpenDocuments), toLocaleString(str.errTitle), true);
+    }
+} catch (e) {
+    alert(e && e.message ? e.message : e, toLocaleString(str.errTitle), true);
+}
+
 function main() {
     var len = apl.getProperty('numberOfDocuments'),
         content = [],
@@ -32,162 +52,271 @@ function main() {
 
     function findLayers() {
         for (var i = 1; i <= len; i++) {
-            app.doProgressTask(slice, "workChunk('Find text layers... ', i)")
+            app.doProgressTask(slice, "workChunk(" + i + ")");
         }
         doc.select(idx, true);
     }
 
-    if (content) {
-        //activeDocument.suspendHistory('Check spelling', 'function (){};');
-        fd.init();
-        var result = fd.sendPayload('spell_check', content);
-        $.writeln(result.toSource())
-        if (result && result.errors_count) {
-            var d = new ActionDescriptor();
-            d.putString(s2t('result'), objectToJSON(result));
-            app.putCustomOptions(UUID, d, false);
-            //dialog();
-            var bt = new BridgeTalk(),
-                ph = BridgeTalk.getSpecifier('photoshop');
-            bt.target = ph;
-            bt.body = "var f=" + dialog.toSource() + ";f('" + UUID + "');";
-            bt.send();
-        } else { alert('No errors!') }
+    if (!content.length) {
+        alert(toLocaleString(str.noTextLayers));
+        return;
     }
-    function workChunk(text, i) {
-        activeDocument.suspendHistory('Find text layers', 'doStuff();')
+
+    fd.init();
+
+    var result = fd.sendPayload('spell_check', content, getUserDictionaryFile().fsName);
+
+    if (result && Number(result.errors_count) > 0) {
+        var resultDesc = new ActionDescriptor();
+        resultDesc.putString(s2t('result'), objectToJSON(result));
+        app.putCustomOptions(UUID, resultDesc, false);
+        //dialog(UUID);
+        var bt = new BridgeTalk(),
+            ph = BridgeTalk.getSpecifier('photoshop');
+
+        bt.target = ph;
+        bt.body = ""
+            + "var API_FILE='" + jsString(API_FILE) + "';"
+            + "var USER_DICTIONARY_FILE='" + jsString(USER_DICTIONARY_FILE) + "';"
+            + "var ver=" + objectToJSON(ver) + ";"
+            + "var toLocaleString =" + toLocaleString.toSource() + ";"
+            + "var getUserDictionaryFile=" + getUserDictionaryFile.toSource() + ";"
+            + "var normalizeDictionaryWord=" + normalizeDictionaryWord.toSource() + ";"
+            + "var addWordToUserDictionary=" + addWordToUserDictionary.toSource() + ";"
+            + "var Locale=" + Locale.toSource() + ";"
+            + "var str=new Locale();"
+            + "var f=" + dialog.toSource() + ";"
+            + "f('" + UUID + "');";
+        bt.send();
+    } else {
+        alert(toLocaleString(str.noErrors));
+    }
+
+    function workChunk(i) {
+        activeDocument.suspendHistory(toLocaleString(str.findTextLayersHistory), 'doStuff();');
+
         function doStuff() {
-            app.changeProgressText(text);
-            doc.select(i, true)
+            app.changeProgressText(toLocaleString(str.findTextLayersProgress));
+            doc.select(i, true);
+
             var hst = activeDocument.activeHistoryState;
+
             if (EXPAND_SMART_OBJECTS) {
                 while (doc.expandSmartObjects(i)) {
                     doc.convertSmartObjectToLayers();
                 }
             }
-            var tmp = [];
-            tmp = content.concat(doc.findAllTextLayers(i));
-            content = tmp;
+
+            content = content.concat(doc.findAllTextLayers(i));
             activeDocument.activeHistoryState = hst;
 
             $.sleep(0);
         }
     }
 }
+
 function AM(target, order) {
     var s2t = stringIDToTypeID,
         t2s = typeIDToStringID,
         AR = ActionReference,
         AD = ActionDescriptor;
+
     target = target ? s2t(target) : null;
+
     this.getProperty = function (property, id, idxMode, descMode) {
         property = s2t(property);
-        (r = new AR).putProperty(s2t('property'), property);
-        id != undefined ? (idxMode ? r.putIndex(target, id) : r.putIdentifier(target, id)) :
-            r.putEnumerated(target, s2t('ordinal'), order ? s2t(order) : s2t('targetEnum'));
-        try { return descMode ? executeActionGet(r) : getDescValue(executeActionGet(r), property) } catch (e) { return false };
-    }
+
+        var ref = new AR();
+        ref.putProperty(s2t('property'), property);
+
+        if (id != undefined) {
+            if (idxMode) {
+                ref.putIndex(target, id);
+            } else {
+                ref.putIdentifier(target, id);
+            }
+        } else {
+            ref.putEnumerated(target, s2t('ordinal'), order ? s2t(order) : s2t('targetEnum'));
+        }
+
+        try {
+            return descMode ? executeActionGet(ref) : getDescValue(executeActionGet(ref), property);
+        } catch (e) {
+            return false;
+        }
+    };
+
     this.hasProperty = function (property, id, idxMode) {
         property = s2t(property);
-        (r = new AR).putProperty(s2t('property'), property);
-        id ? (idxMode ? r.putIndex(target, id) : r.putIdentifier(target, id))
-            : r.putEnumerated(target, s2t('ordinal'), s2t('targetEnum'));
-        try { return executeActionGet(r).hasKey(property) } catch (e) { return false }
-    }
-    this.descToObject = function (d) {
-        var o = {}
-        for (var i = 0; i < d.count; i++) {
-            var k = d.getKey(i)
-            o[t2s(k)] = getDescValue(d, k)
+
+        var ref = new AR();
+        ref.putProperty(s2t('property'), property);
+
+        if (id) {
+            if (idxMode) {
+                ref.putIndex(target, id);
+            } else {
+                ref.putIdentifier(target, id);
+            }
+        } else {
+            ref.putEnumerated(target, s2t('ordinal'), s2t('targetEnum'));
         }
-        return o
+
+        try {
+            return executeActionGet(ref).hasKey(property);
+        } catch (e) {
+            return false;
+        }
+    };
+
+    this.descToObject = function (desc) {
+        var obj = {};
+
+        for (var i = 0; i < desc.count; i++) {
+            var key = desc.getKey(i);
+            obj[t2s(key)] = getDescValue(desc, key);
+        }
+
+        return obj;
+    };
+
+    function getDescValue(desc, property) {
+        switch (desc.getType(property)) {
+            case DescValueType.OBJECTTYPE: return { type: t2s(desc.getObjectType(property)), value: desc.getObjectValue(property) };
+            case DescValueType.LISTTYPE: return desc.getList(property);
+            case DescValueType.REFERENCETYPE: return desc.getReference(property);
+            case DescValueType.BOOLEANTYPE: return desc.getBoolean(property);
+            case DescValueType.STRINGTYPE: return desc.getString(property);
+            case DescValueType.INTEGERTYPE: return desc.getInteger(property);
+            case DescValueType.LARGEINTEGERTYPE: return desc.getLargeInteger(property);
+            case DescValueType.DOUBLETYPE: return desc.getDouble(property);
+            case DescValueType.ALIASTYPE: return desc.getPath(property);
+            case DescValueType.CLASSTYPE: return desc.getClass(property);
+            case DescValueType.UNITDOUBLE: return desc.getUnitDoubleValue(property);
+            case DescValueType.ENUMERATEDTYPE: return { type: t2s(desc.getEnumerationType(property)), value: t2s(desc.getEnumerationValue(property)) };
+            default: return undefined;
+        }
     }
-    function getDescValue(d, p) {
-        switch (d.getType(p)) {
-            case DescValueType.OBJECTTYPE: return { type: t2s(d.getObjectType(p)), value: d.getObjectValue(p) };
-            case DescValueType.LISTTYPE: return d.getList(p);
-            case DescValueType.REFERENCETYPE: return d.getReference(p);
-            case DescValueType.BOOLEANTYPE: return d.getBoolean(p);
-            case DescValueType.STRINGTYPE: return d.getString(p);
-            case DescValueType.INTEGERTYPE: return d.getInteger(p);
-            case DescValueType.LARGEINTEGERTYPE: return d.getLargeInteger(p);
-            case DescValueType.DOUBLETYPE: return d.getDouble(p);
-            case DescValueType.ALIASTYPE: return d.getPath(p);
-            case DescValueType.CLASSTYPE: return d.getClass(p);
-            case DescValueType.UNITDOUBLE: return (d.getUnitDoubleValue(p));
-            case DescValueType.ENUMERATEDTYPE: return { type: t2s(d.getEnumerationType(p)), value: t2s(d.getEnumerationValue(p)) };
-            default: break;
-        };
-    }
+
     this.expandSmartObjects = function (idx) {
-        (r = new ActionReference()).putProperty(s2t('property'), p = s2t('numberOfLayers'));
-        r.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
-        var len = executeActionGet(r).getInteger(p), lrs = [];
+        var ref = new ActionReference(),
+            property = s2t('numberOfLayers');
+
+        ref.putProperty(s2t('property'), property);
+        ref.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
+
+        var len = executeActionGet(ref).getInteger(property),
+            lrs = [];
+
         for (var i = 1; i <= len; i++) {
-            var r = new ActionReference()
-            r.putProperty(s2t('property'), p = s2t('layerKind'));
-            r.putIndex(s2t('layer'), i);
-            // r.putIndex(s2t('document'), idx);
-            if (executeActionGet(r).getInteger(p) == 5) {
-                var locking = lr.getProperty('layerLocking', i, true).value;
-                if (!checkLocking(locking)) {
-                    var r = new ActionReference();
-                    r.putProperty(s2t('property'), p = s2t('smartObject'));
-                    r.putIndex(s2t('layer'), i);
-                    // r.putIndex(s2t('document'), idx);
-                    if (!executeActionGet(r).getObjectValue(p).getBoolean(s2t('linked'))) lrs.push(i)
+            ref = new ActionReference();
+            property = s2t('layerKind');
+
+            ref.putProperty(s2t('property'), property);
+            ref.putIndex(s2t('layer'), i);
+
+            if (executeActionGet(ref).getInteger(property) == 5) {
+                var locking = lr.getProperty('layerLocking', i, true);
+
+                if (locking && !checkLocking(locking.value)) {
+                    ref = new ActionReference();
+                    property = s2t('smartObject');
+
+                    ref.putProperty(s2t('property'), property);
+                    ref.putIndex(s2t('layer'), i);
+
+                    if (!executeActionGet(ref).getObjectValue(property).getBoolean(s2t('linked'))) {
+                        lrs.push(i);
+                    }
                 }
             }
         }
+
         if (lrs.length) {
-            for (var i = 0; i < lrs.length; i++) {
+            for (i = 0; i < lrs.length; i++) {
                 lr.select(lrs[i], true);
-                (r = new ActionReference()).putIndex(s2t('layer'), lrs[i]);
-                (d = new ActionDescriptor()).putReference(s2t('null'), r);
-                (d1 = new ActionDescriptor()).putString(s2t('name'), '<parentID:' + lr.getProperty('layerID') + '>');
-                d.putObject(s2t('to'), s2t('layer'), d1);
-                executeAction(s2t('set'), d, DialogModes.NO);
+
+                ref = new ActionReference();
+                ref.putIndex(s2t('layer'), lrs[i]);
+
+                var desc = new ActionDescriptor(),
+                    descLayer = new ActionDescriptor();
+
+                desc.putReference(s2t('null'), ref);
+                descLayer.putString(s2t('name'), '<parentID:' + lr.getProperty('layerID') + '>');
+                desc.putObject(s2t('to'), s2t('layer'), descLayer);
+
+                executeAction(s2t('set'), desc, DialogModes.NO);
             }
 
-            var r = new ActionReference();
-            for (var i = 0; i < lrs.length; i++) { r.putIndex(s2t('layer'), lrs[i]); }
-            //r.putIndex(s2t('document'), idx);
-            (d = new ActionDescriptor()).putReference(s2t('target'), r);
-            executeAction(s2t('select'), d, DialogModes.NO);
+            ref = new ActionReference();
+
+            for (i = 0; i < lrs.length; i++) {
+                ref.putIndex(s2t('layer'), lrs[i]);
+            }
+
+            var selectDesc = new ActionDescriptor();
+            selectDesc.putReference(s2t('target'), ref);
+            executeAction(s2t('select'), selectDesc, DialogModes.NO);
         }
+
         return lrs.length;
 
-        function checkLocking(d) {
-            var o = lr.descToObject(d);
-            for (var a in o) if (o[a]) return true
-            return false
+        function checkLocking(lockingDesc) {
+            var obj = lr.descToObject(lockingDesc);
+
+            for (var a in obj) {
+                if (obj[a]) return true;
+            }
+
+            return false;
         }
-    }
+    };
+
     this.convertSmartObjectToLayers = function () {
-        try { executeAction(s2t('placedLayerConvertToLayers'), undefined, DialogModes.NO); return true } catch (e) { return false }
-    }
+        try {
+            executeAction(s2t('placedLayerConvertToLayers'), undefined, DialogModes.NO);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
     this.close = function (save) {
-        save = save != true ? s2t("no") : s2t("yes");
-        (d = new AD).putEnumerated(s2t("saving"), s2t("yesNo"), save);
-        executeAction(s2t("close"), d, DialogModes.NO);
-    }
+        save = save != true ? s2t('no') : s2t('yes');
+
+        var desc = new AD();
+        desc.putEnumerated(s2t('saving'), s2t('yesNo'), save);
+        executeAction(s2t('close'), desc, DialogModes.NO);
+    };
+
     this.findAllTextLayers = function (idx) {
-        (r = new ActionReference()).putProperty(s2t('property'), p = s2t('numberOfLayers'));
-        r.putIndex(s2t('document'), idx);
-        var len = executeActionGet(r).getInteger(p), lrs = [],
+        var ref = new ActionReference(),
+            property = s2t('numberOfLayers');
+
+        ref.putProperty(s2t('property'), property);
+        ref.putIndex(s2t('document'), idx);
+
+        var len = executeActionGet(ref).getInteger(property),
+            lrs = [],
             parent = doc.getProperty('documentID');
+
         for (var i = 1; i <= len; i++) {
-            r = new ActionReference();
-            r.putProperty(s2t('property'), p = s2t('layerKind'));
-            r.putIndex(s2t('layer'), i);
-            // r.putIndex(s2t('document'), idx);
-            if (executeActionGet(r).getInteger(p) == 3) {
-                r = new ActionReference();
-                r.putProperty(s2t('property'), p = s2t('textKey'));
-                r.putIndex(s2t('layer'), i);
-                //  r.putIndex(s2t('document'), idx);
-                var content = executeActionGet(r)
-                    .getObjectValue(p)
+            ref = new ActionReference();
+            property = s2t('layerKind');
+
+            ref.putProperty(s2t('property'), property);
+            ref.putIndex(s2t('layer'), i);
+
+            if (executeActionGet(ref).getInteger(property) == 3) {
+                ref = new ActionReference();
+                property = s2t('textKey');
+
+                ref.putProperty(s2t('property'), property);
+                ref.putIndex(s2t('layer'), i);
+
+                var content = executeActionGet(ref)
+                    .getObjectValue(property)
                     .getString(s2t('textKey'))
                     .replace(/[\r\n\t]+/g, ' ')
                     .replace(/\u00A0/g, ' ')
@@ -200,77 +329,148 @@ function AM(target, order) {
                     .replace(/[\\\/|]/g, ' ')
                     .replace(/[•·▪●◦]/g, ' ')
                     .replace(/[^\S\r\n]+/g, ' ')
-                    .replace(/\s+/g, ' ')
+                    .replace(/\s+/g, ' ');
+
                 var pth = [],
-                    parentName = lr.getProperty('name', i, true).match(/<parentID:(\d+)>/);
-                if (parentName && parentName[1]) pth.push(Number(parentName[1]));
+                    layerName = String(lr.getProperty('name', i, true) || ''),
+                    parentName = layerName.match(/<parentID:(\d+)>/);
+
+                if (parentName && parentName[1]) {
+                    pth.push(Number(parentName[1]));
+                }
+
                 var parentID = lr.getProperty('parentLayerID', i, true);
-                while (parentID != -1) {
-                    var parentName = lr.getProperty('name', parentID).match(/<parentID:(\d+)>/);
-                    if (parentName && parentName[1]) {
-                        var id = Number(parentName[1])
+
+                while (parentID != -1 && parentID !== false) {
+                    var currentName = String(lr.getProperty('name', parentID) || ''),
+                        match = currentName.match(/<parentID:(\d+)>/);
+
+                    if (match && match[1]) {
+                        var id = Number(match[1]);
                         parentID = lr.getProperty('parentLayerID', parentID);
                         pth.push(id);
-                    } else parentID = -1;
+                    } else {
+                        parentID = -1;
+                    }
                 }
-                lrs.push({ content: content, id: lr.getProperty('layerID', i, true), path: pth, parent: parent });
+
+                lrs.push({
+                    content: content,
+                    id: lr.getProperty('layerID', i, true),
+                    path: pth,
+                    parent: parent
+                });
             }
         }
+
         return lrs;
-    }
+    };
+
     this.select = function (idx, idxMode) {
-        var r = new ActionReference();
-        idxMode ? r.putIndex(target, idx) : r.putIdentifier(target, idx);
-        (d = new ActionDescriptor()).putReference(s2t('target'), r);
-        executeAction(s2t('select'), d, DialogModes.NO);
-    }
+        var ref = new ActionReference();
+
+        if (idxMode) {
+            ref.putIndex(target, idx);
+        } else {
+            ref.putIdentifier(target, idx);
+        }
+
+        var desc = new ActionDescriptor();
+        desc.putReference(s2t('target'), ref);
+        executeAction(s2t('select'), desc, DialogModes.NO);
+    };
 }
+
 function pyApi(apiHost, portSend, portListen, apiFile) {
     this.init = function () {
-        var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true)
+        var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true);
+
         if (!result) {
-            var f = new File(new File(($.fileName)).path + '/' + apiFile + '.py')
-            if (!f.exists) f = new File(f.fsName + 'w');
-            if (!f.exists) f = new File(new File(($.fileName)).path + '/lib/' + apiFile + '.py')
-            if (!f.exists) f = new File(apiFile.fsName + 'w');
-            if (!f.exists) throw new Error(str.errModule)
+            var f = findPythonModule(apiFile);
+
+            if (!f || !f.exists) {
+                throw new Error(toLocaleString(str.errModule));
+            }
+
             f.execute();
-            var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
-            if (!result) throw new Error(str.errConnection)
-            if (result.type == 'error') throw new Error(result.message)
+
+            result = sendMessage({}, INIT_DELAY, false, true, str.starting);
+
+            if (!result) {
+                throw new Error(toLocaleString(str.errConnection));
+            }
+
+            if (result.type == 'error') {
+                throw new Error(result.message);
+            }
         }
-        return true
-    }
+
+        return true;
+    };
+
     this.sendPayload = function (type, payload) {
-        // $.writeln(payload.toSource())
-        var result = sendMessage({ type: type, message: payload }, DETECTION_DELAY, true, true)
+        var result = sendMessage({ type: type, message: payload, dict: getUserDictionaryFile().fsName }, DETECTION_DELAY, true, true);
+
         if (result) {
-            if (result.type == 'answer') return result['message'];
-            if (result.type == 'error') throw new Error(result.message)
-        } else throw new Error(str.noAnswer)
+            if (result.type == 'answer') return result.message;
+            if (result.type == 'error') throw new Error(result.message);
+        } else {
+            throw new Error(toLocaleString(str.noAnswer));
+        }
+
+        return null;
+    };
+
+    function findPythonModule(apiFile) {
+        var scriptFolder = new File($.fileName).parent,
+            candidates = [
+                new File(scriptFolder.fsName + '/' + apiFile + '.py'),
+                new File(scriptFolder.fsName + '/' + apiFile + '.pyw'),
+                new File(scriptFolder.fsName + '/lib/' + apiFile + '.py'),
+                new File(scriptFolder.fsName + '/lib/' + apiFile + '.pyw')
+            ];
+
+        for (var i = 0; i < candidates.length; i++) {
+            if (candidates[i].exists) {
+                return candidates[i];
+            }
+        }
+
         return null;
     }
+
     function sendMessage(o, delay, sendData, getData, title) {
         delay = delay ? delay : INIT_DELAY;
-        var listener = null;
-        var t1 = 0, t2 = 0, t3 = 0;
+
+        var listener = null,
+            progressWindow = null,
+            bar = null,
+            t1 = 0,
+            t2 = 0,
+            t3 = 0;
+
         if (getData) {
             listener = new Socket();
+
             if (!listener.listen(portListen, 'UTF-8')) {
                 return null;
             }
+
             if (title) {
-                var w = new Window('palette', title),
-                    bar = w.add('progressbar', undefined, 0, PROGRESS_DELAY);
+                progressWindow = new Window('palette', toLocaleString(title));
+                bar = progressWindow.add('progressbar', undefined, 0, PROGRESS_DELAY);
                 bar.preferredSize = [350, 20];
                 bar.value = 0;
-                w.show();
+                progressWindow.show();
             }
-            t1 = (new Date).getTime();
+
+            t1 = (new Date()).getTime();
             t3 = t1;
         }
+
         if (sendData) {
             var sender = new Socket();
+
             if (sender.open(apiHost + ':' + portSend, 'UTF-8')) {
                 sender.writeln(objectToJSON(o));
                 sender.close();
@@ -279,220 +479,455 @@ function pyApi(apiHost, portSend, portListen, apiFile) {
                 return null;
             }
         }
-        if (!getData) return true;
+
+        if (!getData) {
+            return true;
+        }
+
         for (; ;) {
-            t2 = (new Date).getTime();
+            t2 = (new Date()).getTime();
+
             if (t2 - t1 > delay) {
                 if (listener) listener.close();
-                if (title) w.close();
+                if (progressWindow) progressWindow.close();
                 return null;
             }
-            if (title && t2 - t3 > 100) {
-                t3 = t2
-                if (bar.value >= PROGRESS_DELAY) bar.value = 0;
+
+            if (progressWindow && t2 - t3 > 100) {
+                t3 = t2;
+
+                if (bar.value >= PROGRESS_DELAY) {
+                    bar.value = 0;
+                }
+
                 bar.value = bar.value + 100;
-                w.update();
+                progressWindow.update();
             }
+
             var answer = listener.poll();
+
             if (answer != null) {
-                try { var a = eval('(' + answer.readln() + ')'); } catch (e) { a = null; }
-                if (title) { w.close() }
+                var a = null;
+
+                try {
+                    a = eval('(' + answer.readln() + ')');
+                } catch (e) {
+                    a = null;
+                }
+
+                if (progressWindow) progressWindow.close();
+
                 answer.close();
+
                 if (listener) listener.close();
+
                 return a;
             }
+
             $.sleep(1);
         }
     }
-};
+}
+
 function objectToJSON(obj) {
-    if (obj === null) {
+    if (obj === null || obj === undefined) {
         return 'null';
     }
-    if (typeof obj !== 'object') {
-        return '"' + obj + '"';
+
+    var objType = typeof obj;
+
+    if (objType == 'string') {
+        return '"' + jsString(obj) + '"';
     }
+
+    if (objType == 'number') {
+        return isFinite(obj) ? String(obj) : 'null';
+    }
+
+    if (objType == 'boolean') {
+        return obj ? 'true' : 'false';
+    }
+
     if (obj instanceof Array) {
         var arr = [];
+
         for (var i = 0; i < obj.length; i++) {
             arr.push(objectToJSON(obj[i]));
         }
+
         return '[' + arr.join(',') + ']';
     }
-    var keys = [];
+
+    var result = [];
+
     for (var key in obj) {
         if (obj.hasOwnProperty(key)) {
-            keys.push(key);
+            result.push('"' + jsString(key) + '":' + objectToJSON(obj[key]));
         }
     }
-    var result = [];
-    for (var i = 0; i < keys.length; i++) {
-        var key = keys[i];
-        var value = objectToJSON(obj[key]);
-        result.push('"' + key + '":' + value);
-    }
+
     return '{' + result.join(',') + '}';
 }
-function Locale() {
-    this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
-    this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
-    this.starting = { ru: 'Запуск модуля python...', en: 'Starting python module...' }
-    this.noAnswer = { ru: 'Модуль проверки орфографии недоступен!', en: 'The spell checker is unavailable!' }
+
+function jsString(value) {
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n')
+        .replace(/\t/g, '\\t')
+        .replace(/\f/g, '\\f')
+        .replace(/\x08/g, '\\b');
 }
+
+function toLocaleString(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (typeof value == 'string') {
+        return value;
+    }
+
+    var locale = String($.locale || '').toLowerCase();
+
+    if (locale.indexOf('ru') == 0 && value.ru) {
+        return value.ru;
+    }
+
+    if (value.en) {
+        return value.en;
+    }
+
+    for (var key in value) {
+        return value[key];
+    }
+
+    return String(value);
+}
+
+function getUserDictionaryFile() {
+    return new File(app.preferencesFolder.fsName + '/' + USER_DICTIONARY_FILE);
+}
+
+function normalizeDictionaryWord(word) {
+    return String(word || '')
+        .replace(/^\uFEFF/, '')
+        .replace(/^\s+|\s+$/g, '')
+        .replace(/\r]/g, '')
+        .replace(/\n]/g, '')
+        .toLowerCase();
+}
+
+function addWordToUserDictionary(word) {
+    var normalizedWord = normalizeDictionaryWord(word),
+        dictionaryFile = getUserDictionaryFile(),
+        dictionaryContent = '';
+
+    if (!normalizedWord) {
+        return { added: false, exists: false, word: normalizedWord, empty: true };
+    }
+
+    if (dictionaryFile.exists) {
+        dictionaryFile.encoding = 'UTF-8';
+
+        if (!dictionaryFile.open('r')) {
+            throw new Error(toLocaleString(str.dictionaryReadError));
+        }
+
+        dictionaryContent = dictionaryFile.read();
+        dictionaryFile.close();
+
+        var lines = dictionaryContent.split(/\r\n|\r|\n/);
+
+        for (var i = 0; i < lines.length; i++) {
+            if (normalizeDictionaryWord(lines[i]) == normalizedWord) {
+                return { added: false, exists: true, word: normalizedWord };
+            }
+        }
+    }
+
+    dictionaryFile.encoding = 'UTF-8';
+    dictionaryFile.lineFeed = 'Windows';
+
+    if (!dictionaryFile.open('a')) {
+        throw new Error(toLocaleString(str.dictionaryWriteError));
+    }
+
+    dictionaryFile.writeln(normalizedWord);
+    dictionaryFile.close();
+
+    return { added: true, exists: false, word: normalizedWord };
+}
+
+function Locale() {
+    this.errTitle = { ru: 'Ошибка', en: 'Error' };
+    this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке, что и скрипт, или в папке lib.', en: 'Module ' + API_FILE + ' was not found. Make sure it is in the same folder as the script or in the lib folder.' };
+    this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Unable to establish a connection with ' + API_FILE };
+    this.starting = { ru: 'Запуск модуля Python...', en: 'Starting Python module...' };
+    this.noAnswer = { ru: 'Модуль проверки орфографии недоступен!', en: 'The spell checker is unavailable!' };
+    this.noOpenDocuments = { ru: 'Нет открытых документов.', en: 'There are no open documents.' };
+    this.noTextLayers = { ru: 'Текстовые слои не найдены.', en: 'No text layers found.' };
+    this.noErrors = { ru: 'Проверка завершена. В открытых документах орфографические ошибки не найдены.', en: 'Spell check complete. No spelling errors were found in the open documents.' };
+    this.findTextLayersProgress = { ru: 'Поиск текстовых слоев...', en: 'Find text layers...' };
+    this.findTextLayersHistory = { ru: 'Поиск текстовых слоев', en: 'Find text layers' };
+    this.dialogTitle = { ru: 'Проверка орфографии', en: 'Spell Checker' };
+    this.done = { ru: 'Готово', en: 'Done' };
+    this.goToFragment = { ru: 'Перейти к фрагменту', en: 'Go to fragment' };
+    this.dictionaryButtonHint = { ru: 'Добавить слово в пользовательский словарь', en: 'Add word to the user dictionary' };
+    this.dictionaryButtonAddedHint = { ru: 'Слово уже добавлено в пользовательский словарь', en: 'The word has already been added to the user dictionary' };
+    this.dictionaryTitle = { ru: 'Пользовательский словарь', en: 'User dictionary' };
+    this.dictionaryWordAdded = { ru: 'Слово добавлено', en: 'Word added' };
+    this.dictionaryWordAlreadyExists = { ru: 'Слово уже есть в словаре!', en: 'The word is already in the dictionary!' };
+    this.dictionaryEmptyWord = { ru: 'Не удалось добавить слово: слово пустое.', en: 'The word could not be added because it is empty.' };
+    this.dictionaryReadError = { ru: 'Не удалось прочитать пользовательский словарь:', en: 'Could not read the user dictionary:' };
+    this.dictionaryWriteError = { ru: 'Не удалось записать пользовательский словарь:', en: 'Could not write to the user dictionary:' };
+}
+
 function dialog(UUID) {
     var s2t = stringIDToTypeID,
-        t2s = typeIDToStringID,
-        d = new ActionDescriptor();
-    try { d = getCustomOptions(UUID) } catch (e) { };
-    if (!d.count) return;
-    var s = d.getString(s2t('result')),
-        o = eval('(' + s + ')');
-    var d = new Window('palette');
-    d.text = 'Spell Checker';
-    d.orientation = 'column';
-    d.alignChildren = ['fill', 'top'];
-    d.spacing = 5;
-    d.margins = 15;
-    for (var i = 0; i < o.errors.length; i++) { addWord(o.errors[i]); };
-    function addWord(w) {
-        var cur = 1,
-            g = d.add('group');
-        g.orientation = 'row';
-        g.alignChildren = ['left', 'center'];
-        g.spacing = 0;
-        g.margins = 0;
-        var count = g.add('statictext');
-        count.preferredSize = [30, 20];
-        var word = g.add('button');
-        word.preferredSize.width = 350;
-        var add = g.add('button');
-        add.text = '📖';
-        add.preferredSize = [20, 20];
+        optionsDesc = new ActionDescriptor();
 
-        word.text = w.word + ' (' + w.suggestion + '?)';
-        renew(cur, w.count, count);
+    try {
+        optionsDesc = getCustomOptions(UUID);
+    } catch (e) { }
 
-        word.onClick = function () {
-            renew(cur, w.count, count);
-            var fragment = w.fragments[cur - 1];
-            select(s2t('document'), Number(fragment.parent));
+    if (!optionsDesc.count) {
+        return;
+    }
 
-            if (fragment.path.length) {
-                for (var i = 0; i < fragment.path.length; i++) {
-                    select(s2t('layer'), Number(fragment.path[i]));
-                    executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO);
-                };
-            };
-            var id = null;
-            if (fragment.path.length == 0) {
-                id = Number(fragment.id);
-                select(s2t('layer'), id);
-            } else {
-                id = findTextLayer(w.word);
-            };
-            if (id) activeView(id, 0.7);
-            cur++;
-            if (cur > Number(w.count)) cur = 1;
-            currentTool = 'typeCreateOrEditTool';
-        };
-        function renew(cur, total, text) {
-            text.text = cur + '/' + total;
-        };
-        function select(target, id) {
-            var r = new ActionReference();
-            r.putIdentifier(target, id);
-            var d = new ActionDescriptor();
-            d.putReference(s2t('target'), r);
-            executeAction(s2t('select'), d, DialogModes.NO);
-        };
+    var serializedResult = optionsDesc.getString(s2t('result')),
+        result = eval('(' + serializedResult + ')'),
+        win = new Window('palette');
 
-    };
+    win.text = toLocaleString(str.dialogTitle) + ' v' + ver;
+    win.orientation = 'column';
+    win.alignChildren = ['fill', 'top'];
+    win.spacing = 5;
+    win.margins = 15;
 
-    var grOk = d.add('group', undefined, { name: 'grOk' });
+    for (var i = 0; i < result.errors.length; i++) {
+        addWord(result.errors[i]);
+    }
+
+    var grOk = win.add('group', undefined, { name: 'grOk' });
     grOk.orientation = 'row';
     grOk.alignChildren = ['center', 'center'];
     grOk.spacing = 10;
     grOk.margins = 0;
 
     var ok = grOk.add('button', undefined, undefined, { name: 'ok' });
-    ok.text = 'Done';
+    ok.text = toLocaleString(str.done);
 
-    ok.onClick = function () { d.close(); };
+    ok.onClick = function () {
+        win.close();
+    };
 
-    d.onShow = function () {
-        var screen = activeView(undefined, undefined, true)
+    win.onShow = function () {
+        var screen = activeView(undefined, undefined, true);
+        win.location = [screen[3] - win.size.width - 20, screen[2] - win.size.height - 20];
+    };
 
-        d.location = [screen[3] - d.size.width - 20, screen[2] - d.size.height - 20];
-    }
+    win.show();
 
+    function addWord(w) {
+        var cur = 1,
+            group = win.add('group');
 
-    d.show();
+        group.orientation = 'row';
+        group.alignChildren = ['left', 'center'];
+        group.spacing = 0;
+        group.margins = 0;
 
-    function activeView(layerID, zoom, returnScreenCoordinates) {
-        var r = new ActionReference();
-        r.putProperty(s2t('property'), p = s2t('viewInfo'));
-        r.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
+        var count = group.add('statictext');
+        count.preferredSize = [30, 20];
 
-        var activeView = executeActionGet(r).getObjectValue(p).getObjectValue(s2t('activeView')).getObjectValue(s2t('globalBounds')),
-            docW = activeView.getDouble(s2t('right')) - activeView.getDouble(s2t('left')),
-            docH = activeView.getDouble(s2t('bottom')) - activeView.getDouble(s2t('top'));
+        var word = group.add('button');
+        word.preferredSize.width = 350;
+        word.helpTip = toLocaleString(str.goToFragment);
 
-        if (returnScreenCoordinates) {
-            return ([activeView.getDouble(s2t('top')), activeView.getDouble(s2t('left')), activeView.getDouble(s2t('bottom')), activeView.getDouble(s2t('right'))])
+        var add = group.add('button');
+        add.text = '📖';
+        add.preferredSize = [20, 20];
+        add.helpTip = toLocaleString(str.dictionaryButtonHint);
+
+        add.onClick = function () {
+            try {
+                var dictionaryResult = addWordToUserDictionary(w.word),
+                    message = '';
+
+                if (dictionaryResult.empty) {
+                    alert(toLocaleString(str.dictionaryEmptyWord), toLocaleString(str.dictionaryTitle), true);
+                    return;
+                }
+
+                if (dictionaryResult.exists) {
+                    message = toLocaleString(str.dictionaryWordAlreadyExists)
+                } else {
+                    message = toLocaleString(str.dictionaryWordAdded)
+                }
+
+                alert(message, toLocaleString(str.dictionaryTitle), false);
+
+                add.enabled = false;
+                add.helpTip = toLocaleString(str.dictionaryButtonAddedHint);
+            } catch (e) {
+                alert(e && e.message ? e.message : e, toLocaleString(str.errTitle), true);
+            }
         };
 
-        var r = new ActionReference();
-        r.putProperty(s2t('property'), p = s2t('bounds'));
-        r.putIdentifier(s2t('layer'), layerID);
+        word.text = w.suggestion ? (w.word + ' → ' + w.suggestion) : w.word;
+        renew(cur, w.count, count);
 
-        var lrBounds = executeActionGet(r).getObjectValue(p);
-        x = lrBounds.getUnitDoubleValue(s2t('left')) + lrBounds.getUnitDoubleValue(s2t('width')) / 2,
+        word.onClick = function () {
+            renew(cur, w.count, count);
+
+            var fragment = w.fragments[cur - 1];
+
+            select(s2t('document'), Number(fragment.parent));
+
+            if (fragment.path.length) {
+                for (var i = 0; i < fragment.path.length; i++) {
+                    select(s2t('layer'), Number(fragment.path[i]));
+                    executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO);
+                }
+            }
+
+            var id = null;
+
+            if (fragment.path.length == 0) {
+                id = Number(fragment.id);
+                select(s2t('layer'), id);
+            } else {
+                id = findTextLayer(w.word);
+            }
+
+            if (id) {
+                activeView(id, 0.7);
+            }
+
+            cur++;
+
+            if (cur > Number(w.count)) {
+                cur = 1;
+            }
+
+            currentTool = 'typeCreateOrEditTool';
+        };
+
+        function renew(cur, total, text) {
+            text.text = cur + '/' + total;
+        }
+
+        function select(target, id) {
+            var ref = new ActionReference();
+            ref.putIdentifier(target, id);
+
+            var desc = new ActionDescriptor();
+            desc.putReference(s2t('target'), ref);
+
+            executeAction(s2t('select'), desc, DialogModes.NO);
+        }
+    }
+
+    function activeView(layerID, zoom, returnScreenCoordinates) {
+        var ref = new ActionReference(),
+            property = s2t('viewInfo');
+
+        ref.putProperty(s2t('property'), property);
+        ref.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
+
+        var viewBounds = executeActionGet(ref)
+            .getObjectValue(property)
+            .getObjectValue(s2t('activeView'))
+            .getObjectValue(s2t('globalBounds')),
+            docW = viewBounds.getDouble(s2t('right')) - viewBounds.getDouble(s2t('left')),
+            docH = viewBounds.getDouble(s2t('bottom')) - viewBounds.getDouble(s2t('top'));
+
+        if (returnScreenCoordinates) {
+            return [
+                viewBounds.getDouble(s2t('top')),
+                viewBounds.getDouble(s2t('left')),
+                viewBounds.getDouble(s2t('bottom')),
+                viewBounds.getDouble(s2t('right'))
+            ];
+        }
+
+        ref = new ActionReference();
+        property = s2t('bounds');
+
+        ref.putProperty(s2t('property'), property);
+        ref.putIdentifier(s2t('layer'), layerID);
+
+        var lrBounds = executeActionGet(ref).getObjectValue(property),
+            x = lrBounds.getUnitDoubleValue(s2t('left')) + lrBounds.getUnitDoubleValue(s2t('width')) / 2,
             y = lrBounds.getUnitDoubleValue(s2t('top')) + lrBounds.getUnitDoubleValue(s2t('height')) / 2,
             w = lrBounds.getUnitDoubleValue(s2t('width')),
             h = lrBounds.getUnitDoubleValue(s2t('height')),
             k = Math.min(docW / w, docH / h) * (zoom ? zoom : 1),
-            d = new ActionDescriptor();
-        d.putUnitDouble(s2t('zoom'), s2t('percentUnit'), k);
-        setProperty('document', 'zoom', d);
+            zoomDesc = new ActionDescriptor();
 
-        var d = new ActionDescriptor();
-        d.putUnitDouble(s2t('horizontal'), s2t('distanceUnit'), x * k);
-        d.putUnitDouble(s2t('vertical'), s2t('distanceUnit'), y * k);
-        setProperty('document', 'center', d);
+        zoomDesc.putUnitDouble(s2t('zoom'), s2t('percentUnit'), k);
+        setProperty('document', 'zoom', zoomDesc);
 
-        function setProperty(target, property, desc) {
-            var r = new ActionReference();
-            r.putProperty(s2t('property'), p = s2t(property));
-            r.putEnumerated(s2t(target), s2t('ordinal'), s2t('targetEnum'));
-            var d = new ActionDescriptor;
-            d.putReference(s2t('null'), r);
-            d.putObject(s2t('to'), p, desc);
-            executeAction(s2t('set'), d, DialogModes.NO);
-        };
-    };
+        var centerDesc = new ActionDescriptor();
+
+        centerDesc.putUnitDouble(s2t('horizontal'), s2t('distanceUnit'), x * k);
+        centerDesc.putUnitDouble(s2t('vertical'), s2t('distanceUnit'), y * k);
+        setProperty('document', 'center', centerDesc);
+
+        function setProperty(target, propertyName, descValue) {
+            var propertyRef = new ActionReference(),
+                propertyID = s2t(propertyName);
+
+            propertyRef.putProperty(s2t('property'), propertyID);
+            propertyRef.putEnumerated(s2t(target), s2t('ordinal'), s2t('targetEnum'));
+
+            var desc = new ActionDescriptor();
+            desc.putReference(s2t('null'), propertyRef);
+            desc.putObject(s2t('to'), propertyID, descValue);
+
+            executeAction(s2t('set'), desc, DialogModes.NO);
+        }
+    }
+
     function findTextLayer(content) {
-        var r = new ActionReference();
-        r.putProperty(s2t('property'), p = s2t('numberOfLayers'));
-        r.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
-        var len = executeActionGet(r).getInteger(p);
-        for (var i = 1; i <= len; i++) {
-            var r = new ActionReference();
-            r.putProperty(s2t('property'), p = s2t('layerKind'));
-            r.putIndex(s2t('layer'), i);
-            if (executeActionGet(r).getInteger(p) == 3) {
-                var r = new ActionReference();
-                r.putProperty(s2t('property'), p = s2t('textKey'));
-                r.putIndex(s2t('layer'), i);
-                var text = executeActionGet(r).getObjectValue(p).getString(p);
-                if (text.indexOf(content) != -1) {
-                    var r = new ActionReference();
-                    r.putProperty(s2t('property'), p = s2t('layerID'));
-                    r.putIndex(s2t('layer'), i);
-                    return executeActionGet(r).getInteger(p);
-                };
-            };
-        };
-        return null;
-    };
+        var ref = new ActionReference(),
+            property = s2t('numberOfLayers');
 
-};
+        ref.putProperty(s2t('property'), property);
+        ref.putEnumerated(s2t('document'), s2t('ordinal'), s2t('targetEnum'));
+
+        var len = executeActionGet(ref).getInteger(property);
+
+        for (var i = 1; i <= len; i++) {
+            ref = new ActionReference();
+            property = s2t('layerKind');
+
+            ref.putProperty(s2t('property'), property);
+            ref.putIndex(s2t('layer'), i);
+
+            if (executeActionGet(ref).getInteger(property) == 3) {
+                ref = new ActionReference();
+                property = s2t('textKey');
+
+                ref.putProperty(s2t('property'), property);
+                ref.putIndex(s2t('layer'), i);
+
+                var text = executeActionGet(ref).getObjectValue(property).getString(property);
+
+                if (text.indexOf(content) != -1) {
+                    ref = new ActionReference();
+                    property = s2t('layerID');
+
+                    ref.putProperty(s2t('property'), property);
+                    ref.putIndex(s2t('layer'), i);
+
+                    return executeActionGet(ref).getInteger(property);
+                }
+            }
+        }
+
+        return null;
+    }
+}

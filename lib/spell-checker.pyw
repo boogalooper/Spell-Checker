@@ -1,13 +1,13 @@
 import os
 import socket
 import json
+import re
 import threading
 import time
 import sys
 import subprocess
 from collections import OrderedDict
 
-# ================= AUTO-INSTALL =================
 def ensure_package(package_name, import_name=None):
     if import_name is None:
         import_name = package_name
@@ -18,10 +18,11 @@ def ensure_package(package_name, import_name=None):
         subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
 
 ensure_package("requests")
+ensure_package("pymorphy3")
 
 import requests
+import pymorphy3
 
-# ================= CONFIG =================
 API_HOST = "127.0.0.1"
 API_PORT_SEND = 6411
 API_PORT_LISTEN = 6410
@@ -44,9 +45,15 @@ IGNORE_WORDS_WITH_DIGITS_LOCAL = False
 IGNORE_ALL_CAPS_WORDS_LOCAL = False
 
 USE_CUSTOM_WORDS = False
+CUSTOM_WORDS = set()
+
+INCLUDE_PERSON_NAME_CASE_ERRORS_LOCAL = True
+PERSON_NAME_CASE_MIN_SCORE = 0.25
+PERSON_NAME_TAGS = {"Name", "Surn", "Patr"}
+USE_EXCEPTIONS_BASE_FOR_NAME_CASE = True
 
 MAX_TEXT_LENGTH = 500000
-DEBUG = True
+DEBUG = False
 
 last_request_time = time.time()
 
@@ -55,19 +62,47 @@ ERROR_REPEAT_WORD = 2
 ERROR_CAPITALIZATION = 3
 ERROR_TOO_MANY_ERRORS = 4
 
-# ================= EXCEPTIONS BASE =================
+EXCEPTIONS_BASE_STATIC = set()
 EXCEPTIONS_BASE = set()
+MORPH = pymorphy3.MorphAnalyzer()
+CYRILLIC_WORD_RE = re.compile(r"[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*")
+
 
 def normalize_word(word: str) -> str:
     return (word or "").strip().lower()
 
+
+def read_words_file(path: str) -> set:
+    if not path:
+        return set()
+
+    path = os.path.abspath(os.path.expanduser(str(path).strip()))
+
+    if not os.path.isfile(path):
+        if DEBUG:
+            print(f"[DEBUG] Dictionary file ignored: {path}")
+        return set()
+
+    for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return {
+                    normalize_word(line)
+                    for line in f
+                    if normalize_word(line)
+                }
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            print(f"[WARN] Failed to load dictionary {path}: {e}")
+            return set()
+
+    print(f"[WARN] Failed to decode dictionary: {path}")
+    return set()
+
+
 def load_exceptions_base():
-    """
-    Загружает exceptions_base.txt из:
-    - текущей директории
-    - ./lib/
-    """
-    global EXCEPTIONS_BASE
+    global EXCEPTIONS_BASE_STATIC, EXCEPTIONS_BASE
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -76,24 +111,54 @@ def load_exceptions_base():
         os.path.join(base_dir, "lib", "exceptions_base.txt"),
     ]
 
+    EXCEPTIONS_BASE_STATIC = set()
+
     for path in paths:
         if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    EXCEPTIONS_BASE = {
-                        normalize_word(line)
-                        for line in f
-                        if line.strip()
-                    }
-                print(f"[INFO] Exceptions loaded: {len(EXCEPTIONS_BASE)} from {path}")
-                return
-            except Exception as e:
-                print(f"[WARN] Failed to load exceptions from {path}: {e}")
+            EXCEPTIONS_BASE_STATIC = read_words_file(path)
+            EXCEPTIONS_BASE = set(EXCEPTIONS_BASE_STATIC)
+            if DEBUG:
+                print(f"[INFO] Exceptions loaded: {len(EXCEPTIONS_BASE_STATIC)} from {path}")
+            return
 
+    EXCEPTIONS_BASE = set()
     print("[INFO] exceptions_base.txt not found, continuing with empty set")
 
 
-# ================= HELPERS =================
+def refresh_exceptions_for_request(user_dictionary_path: str = ""):
+    global EXCEPTIONS_BASE
+
+    EXCEPTIONS_BASE = set(EXCEPTIONS_BASE_STATIC)
+
+    user_words = read_words_file(user_dictionary_path)
+    if user_words:
+        EXCEPTIONS_BASE.update(user_words)
+        if DEBUG:
+            print(f"[DEBUG] User dictionary loaded: {len(user_words)} from {user_dictionary_path}")
+
+
+def extract_user_dictionary_path(message) -> str:
+    if not isinstance(message, dict):
+        return ""
+
+    for key in ("dict", "userDictionaryPath", "user_dictionary_path", "dictionaryPath"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    payload = message.get("message")
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            for key in ("userDictionaryPath", "user_dictionary_path", "dictionaryPath", "dict"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+    return ""
+
+
 def is_all_caps(word: str) -> bool:
     letters = [ch for ch in word if ch.isalpha()]
     return bool(letters) and all(ch.isupper() for ch in letters)
@@ -142,7 +207,134 @@ def split_text_for_speller(text: str):
     return result
 
 
-# ================= SOCKET RECEIVE =================
+def is_person_name_part(word: str) -> bool:
+    lw = normalize_word(word)
+    if not lw:
+        return False
+
+    if USE_EXCEPTIONS_BASE_FOR_NAME_CASE and lw in EXCEPTIONS_BASE_STATIC:
+        return True
+
+    parses = MORPH.parse(lw)
+    if not parses:
+        return False
+
+    best = parses[0]
+    if best.score < PERSON_NAME_CASE_MIN_SCORE:
+        return False
+
+    return bool(set(best.tag.grammemes) & PERSON_NAME_TAGS)
+
+
+def is_person_name_token(word: str) -> bool:
+    if not word or not any(ch.isalpha() for ch in word):
+        return False
+
+    parts = [part for part in word.split("-") if part]
+    if not parts:
+        return False
+
+    return all(is_person_name_part(part) for part in parts)
+
+
+def titlecase_person_name_token(word: str) -> str:
+    result = []
+    for part in word.split("-"):
+        if not part:
+            result.append(part)
+        else:
+            result.append(part[:1].upper() + part[1:].lower())
+    return "-".join(result)
+
+
+def has_correct_person_name_case(word: str) -> bool:
+    return word == titlecase_person_name_token(word)
+
+
+def iter_person_name_sequences(content: str):
+    tokens = []
+
+    for match in CYRILLIC_WORD_RE.finditer(content or ""):
+        word = match.group(0)
+
+        if should_skip_word(word):
+            continue
+
+        tokens.append({
+            "word": word,
+            "pos": match.start(),
+            "len": len(word),
+            "is_name": is_person_name_token(word),
+        })
+
+    i = 0
+    while i < len(tokens):
+        if not tokens[i]["is_name"]:
+            i += 1
+            continue
+
+        j = i + 1
+        while j < len(tokens) and tokens[j]["is_name"]:
+            j += 1
+
+        if j - i >= 2:
+            yield tokens[i:j]
+
+        i = j
+
+
+def iter_person_name_case_errors(content: str):
+    if not INCLUDE_PERSON_NAME_CASE_ERRORS_LOCAL:
+        return
+
+    for sequence in iter_person_name_sequences(content):
+        for token in sequence:
+            word = token["word"]
+            suggestion = titlecase_person_name_token(word)
+
+            if word == suggestion:
+                continue
+
+            yield {
+                "word": word,
+                "suggestion": suggestion,
+                "pos": token["pos"],
+                "len": token["len"],
+            }
+
+
+def fragment_occurrence_key(fragment_index, word, pos):
+    return (fragment_index, normalize_word(word), pos)
+
+
+def add_grouped_error(grouped, word, suggestion, fragment_id, fragment_path, fragment_parent):
+    key = normalize_word(word)
+
+    if key not in grouped:
+        grouped[key] = {
+            "word": word,
+            "suggestion": suggestion,
+            "count": 1,
+            "fragments": [
+                {
+                    'id': fragment_id,
+                    "path": fragment_path,
+                    "parent": fragment_parent
+                }
+            ]
+        }
+    else:
+        grouped[key]["count"] += 1
+
+        if not grouped[key]["suggestion"] and suggestion:
+            grouped[key]["suggestion"] = suggestion
+
+        grouped[key]["fragments"].append({
+            'id': fragment_id,
+            "path": fragment_path,
+            "parent": fragment_parent
+        })
+
 def receive_full_json(client_socket):
     client_socket.settimeout(SOCKET_READ_TIMEOUT)
     buffer = bytearray()
@@ -168,15 +360,16 @@ def receive_full_json(client_socket):
 
     return bytes(buffer)
 
+def check_spelling_yandex(text, user_dictionary_path=""):
+    refresh_exceptions_for_request(user_dictionary_path)
 
-# ================= SPELL CHECK =================
-def check_spelling_yandex(text):
-    # ================= NEW FORMAT: list of objects =================
+    if DEBUG and user_dictionary_path:
+        print(f"[DEBUG] User dictionary path: {user_dictionary_path}")
     if not isinstance(text, list):
         text = str(text).strip()
         if not text:
             return {"errors_count": 0, "errors_total_count": 0, "errors": []}
-        return check_spelling_yandex(text)
+        text = [{"content": text, "id": "", "path": [], "parent": ""}]
 
     prepared_fragments = []
     total_text_length = 0
@@ -224,7 +417,8 @@ def check_spelling_yandex(text):
 
     for fragment in prepared_fragments:
         payload.append(("text", fragment["content"]))
-    print(payload)
+    if DEBUG:
+        print("[DEBUG] Input:", payload)
     response = requests.post(
         YANDEX_SPELLER_URL,
         data=payload,
@@ -233,9 +427,11 @@ def check_spelling_yandex(text):
     response.raise_for_status()
 
     data = response.json()
-    print(data)
+    if DEBUG:
+        print("[DEBUG] YandexSpeller:", data)
     grouped = OrderedDict()
     total_error_occurrences = 0
+    seen_error_occurrences = set()
 
     for idx, chunk_errors in enumerate(data):
         if not isinstance(chunk_errors, list):
@@ -268,37 +464,46 @@ def check_spelling_yandex(text):
 
             key = normalize_word(word)
 
-            # ================= EXCEPTIONS FILTER =================
             if key in EXCEPTIONS_BASE:
                 continue
 
             suggestion = suggestions[0] if suggestions else ""
+            occurrence_key = fragment_occurrence_key(idx, word, item.get("pos"))
+            if occurrence_key in seen_error_occurrences:
+                continue
+            seen_error_occurrences.add(occurrence_key)
 
-            if key not in grouped:
-                grouped[key] = {
-                    "word": word,
-                    "suggestion": suggestion,
-                    "count": 1,
-                    "fragments": [
-                        {
-                            'id':fragment_id,
-                            "path": fragment_path,
-                            "parent": fragment_parent
-                        }
-                    ]
-                }
-            else:
-                grouped[key]["count"] += 1
+            add_grouped_error(
+                grouped,
+                word,
+                suggestion,
+                fragment_id,
+                fragment_path,
+                fragment_parent
+            )
+            total_error_occurrences += 1
 
-                if not grouped[key]["suggestion"] and suggestion:
-                    grouped[key]["suggestion"] = suggestion
+    for idx, fragment in enumerate(prepared_fragments):
+        fragment_path = fragment["path"]
+        fragment_parent = fragment["parent"]
+        fragment_id = fragment["id"]
 
-                grouped[key]["fragments"].append({
-                    'id': fragment_id,
-                    "path": fragment_path,
-                    "parent": fragment_parent
-                })
+        for item in iter_person_name_case_errors(fragment["content"]):
+            word = item["word"]
+            suggestion = item["suggestion"]
+            occurrence_key = fragment_occurrence_key(idx, word, item.get("pos"))
+            if occurrence_key in seen_error_occurrences:
+                continue
+            seen_error_occurrences.add(occurrence_key)
 
+            add_grouped_error(
+                grouped,
+                word,
+                suggestion,
+                fragment_id,
+                fragment_path,
+                fragment_parent
+            )
             total_error_occurrences += 1
 
     return {
@@ -308,7 +513,6 @@ def check_spelling_yandex(text):
     }
 
 
-# ================= SERVICE =================
 def send_data_to_jsx(obj):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -318,8 +522,6 @@ def send_data_to_jsx(obj):
     except Exception:
         pass
 
-
-# ================= SERVER =================
 def handle_client(client_socket, server):
     global last_request_time
 
@@ -338,8 +540,10 @@ def handle_client(client_socket, server):
 
             elif msg_type == "spell_check":
                 text = message.get("message", "")
-                result = check_spelling_yandex(text)
-
+                user_dictionary_path = extract_user_dictionary_path(message)
+                result = check_spelling_yandex(text, user_dictionary_path)
+                if DEBUG:
+                    print("[DEBUG] Result:", result)
                 send_data_to_jsx({
                     "type": "answer",
                     "message": result
