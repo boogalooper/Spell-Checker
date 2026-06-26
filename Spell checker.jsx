@@ -86,9 +86,7 @@ function main() {
             doc.select(i, true);
             var hst = activeDocument.activeHistoryState;
             if (EXPAND_SMART_OBJECTS) {
-                while (doc.expandSmartObjects(i)) {
-                    doc.convertSmartObjectToLayers();
-                }
+                while (doc.expandSmartObjects(i) && doc.convertSmartObjectToLayers()) { }
             }
             content = content.concat(doc.findAllTextLayers(i));
             activeDocument.activeHistoryState = hst;
