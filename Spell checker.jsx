@@ -46,6 +46,7 @@ function main() {
     function findLayers() {
         for (var i = 1; i <= len; i++) {
             app.doProgressTask(slice, "workChunk(" + i + ")");
+            workChunk(i)
         }
         doc.select(idx, true);
     }
@@ -80,16 +81,14 @@ function main() {
         alert(toLocaleString(str.noErrors));
     }
     function workChunk(i) {
+        var hst = activeDocument.activeHistoryState;
         activeDocument.suspendHistory(toLocaleString(str.findTextLayersHistory), 'doStuff();');
+        activeDocument.activeHistoryState = hst;
         function doStuff() {
             app.changeProgressText(toLocaleString(str.findTextLayersProgress));
             doc.select(i, true);
-            var hst = activeDocument.activeHistoryState;
-            if (EXPAND_SMART_OBJECTS) {
-                while (doc.expandSmartObjects(i) && doc.convertSmartObjectToLayers()) { }
-            }
+            if (EXPAND_SMART_OBJECTS) { while (doc.expandSmartObjects(i) && doc.convertSmartObjectToLayers()) { } }
             content = content.concat(doc.findAllTextLayers(i));
-            activeDocument.activeHistoryState = hst;
             $.sleep(0);
         }
     }
