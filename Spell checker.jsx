@@ -8,7 +8,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.11,
+const ver = 0.12,
     UUID = 'c2007b83-5e0f-4d8f-8862-77b28358de34',
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6410,
@@ -81,12 +81,12 @@ function main() {
         alert(toLocaleString(str.noErrors));
     }
     function workChunk(i) {
+        doc.select(i, true);
         var hst = activeDocument.activeHistoryState;
         activeDocument.suspendHistory(toLocaleString(str.findTextLayersHistory), 'doStuff();');
         activeDocument.activeHistoryState = hst;
         function doStuff() {
             app.changeProgressText(toLocaleString(str.findTextLayersProgress));
-            doc.select(i, true);
             if (EXPAND_SMART_OBJECTS) { while (doc.expandSmartObjects(i) && doc.convertSmartObjectToLayers()) { } }
             content = content.concat(doc.findAllTextLayers(i));
             $.sleep(0);
