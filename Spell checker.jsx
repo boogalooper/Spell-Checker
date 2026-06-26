@@ -29,11 +29,10 @@ var fd = new pyApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     str = new Locale();
 
 isCancelled = false;
-
 $.localize = true;
 
 try {
-    if (apl.getProperty('numberOfDocuments')) {
+    if (apl.getProperty('numberOfDocuments') && lr.getProperty('parentLayerID')) {
         main();
     } else {
         alert(toLocaleString(str.noOpenDocuments), toLocaleString(str.errTitle), true);
@@ -603,7 +602,7 @@ function toLocaleString(value) {
         return value[key];
     }
 
-    return String(value);
+    return value;
 }
 
 function getUserDictionaryFile() {
@@ -692,6 +691,7 @@ function Locale() {
 }
 
 function dialog(UUID) {
+
     var s2t = stringIDToTypeID,
         optionsDesc = new ActionDescriptor();
 
@@ -779,7 +779,7 @@ function dialog(UUID) {
                     message = toLocaleString(str.dictionaryWordAdded);
                 }
 
-                alert(message + '\n\n' + dictionaryResult.word, toLocaleString(str.dictionaryTitle), false);
+                alert(message + ' ' + dictionaryResult.word, toLocaleString(str.dictionaryTitle), false);
 
                 add.enabled = false;
                 add.helpTip = toLocaleString(str.dictionaryButtonAddedHint);
@@ -804,7 +804,7 @@ function dialog(UUID) {
                 var target = goToFragment(w, cur, false);
 
                 if (!target || !target.id) {
-                    alert(toLocaleString(str.correctionNotFound) + '\n\n' + w.word, toLocaleString(str.errTitle), true);
+                    alert(toLocaleString(str.correctionNotFound) + ' ' + w.word, toLocaleString(str.errTitle), true);
                     cur = nextIndex(cur, w.count);
                     return;
                 }
@@ -812,7 +812,7 @@ function dialog(UUID) {
                 var correctionResult = replaceWordInTextLayer(target.id, w.word, w.suggestion);
 
                 if (!correctionResult || !correctionResult.replaced) {
-                    alert(toLocaleString(str.correctionNotFound) + '\n\n' + w.word, toLocaleString(str.errTitle), true);
+                    alert(toLocaleString(str.correctionNotFound) + ' ' + w.word, toLocaleString(str.errTitle), true);
                 } else {
                     activeView(target.id, 0.7);
                 }
