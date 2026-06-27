@@ -53,32 +53,33 @@ function main() {
     if (!content.length) {
         alert(toLocaleString(str.noTextLayers));
         return;
-    }
-    fd.init();
-    var result = fd.sendPayload('spell_check', content, getUserDictionaryFile().fsName);
-    if (result && Number(result.errors_count) > 0) {
-        var resultDesc = new ActionDescriptor();
-        resultDesc.putString(s2t('result'), objectToJSON(result));
-        app.putCustomOptions(UUID, resultDesc, false);
-        //dialog(UUID);
-        var bt = new BridgeTalk(),
-            ph = BridgeTalk.getSpecifier('photoshop');
-        bt.target = ph;
-        bt.body = ""
-            + "var API_FILE='" + jsString(API_FILE) + "';"
-            + "var USER_DICTIONARY_FILE='" + jsString(USER_DICTIONARY_FILE) + "';"
-            + "var ver=" + objectToJSON(ver) + ";"
-            + "var toLocaleString =" + toLocaleString.toSource() + ";"
-            + "var getUserDictionaryFile=" + getUserDictionaryFile.toSource() + ";"
-            + "var normalizeDictionaryWord=" + normalizeDictionaryWord.toSource() + ";"
-            + "var addWordToUserDictionary=" + addWordToUserDictionary.toSource() + ";"
-            + "var Locale=" + Locale.toSource() + ";"
-            + "var str=new Locale();"
-            + "var f=" + dialog.toSource() + ";"
-            + "f('" + UUID + "');";
-        bt.send();
     } else {
-        alert(toLocaleString(str.noErrors));
+        fd.init();
+        var result = fd.sendPayload('spell_check', content, getUserDictionaryFile().fsName);
+        if (result && Number(result.errors_count) > 0) {
+            var resultDesc = new ActionDescriptor();
+            resultDesc.putString(s2t('result'), objectToJSON(result));
+            app.putCustomOptions(UUID, resultDesc, false);
+            //dialog(UUID);
+            var bt = new BridgeTalk(),
+                ph = BridgeTalk.getSpecifier('photoshop');
+            bt.target = ph;
+            bt.body = ""
+                + "var API_FILE='" + jsString(API_FILE) + "';"
+                + "var USER_DICTIONARY_FILE='" + jsString(USER_DICTIONARY_FILE) + "';"
+                + "var ver=" + objectToJSON(ver) + ";"
+                + "var toLocaleString =" + toLocaleString.toSource() + ";"
+                + "var getUserDictionaryFile=" + getUserDictionaryFile.toSource() + ";"
+                + "var normalizeDictionaryWord=" + normalizeDictionaryWord.toSource() + ";"
+                + "var addWordToUserDictionary=" + addWordToUserDictionary.toSource() + ";"
+                + "var Locale=" + Locale.toSource() + ";"
+                + "var str=new Locale();"
+                + "var f=" + dialog.toSource() + ";"
+                + "f('" + UUID + "');";
+            bt.send();
+        } else {
+            alert(toLocaleString(str.noErrors));
+        }
     }
     function workChunk(i) {
         doc.select(i, true);
