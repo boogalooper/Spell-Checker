@@ -8,17 +8,17 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.12,
+const ver = 0.13,
     UUID = 'c2007b83-5e0f-4d8f-8862-77b28358de34',
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6410,
     API_PORT_LISTEN = 6411,
     API_FILE = 'spell-checker',
     USER_DICTIONARY_FILE = 'spell-checker-user-dictionary.txt',
-    INIT_DELAY = 15000,
-    DETECTION_DELAY = 2000,
+    INIT_DELAY = 60000,
+    DETECTION_DELAY = 60000,
     PROGRESS_DELAY = 2500,
-    PING_DELAY = 100,
+    PING_DELAY = 1000,
     EXPAND_SMART_OBJECTS = true;
 var fd = new pyApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     s2t = stringIDToTypeID,
@@ -46,7 +46,6 @@ function main() {
     function findLayers() {
         for (var i = 1; i <= len; i++) {
             app.doProgressTask(slice, "workChunk(" + i + ")");
-            workChunk(i)
         }
         doc.select(idx, true);
     }
@@ -55,7 +54,7 @@ function main() {
         return;
     } else {
         fd.init();
-        var result = fd.sendPayload('spell_check', content, getUserDictionaryFile().fsName);
+        var result = fd.sendPayload('spell_check', content);
         if (result && Number(result.errors_count) > 0) {
             var resultDesc = new ActionDescriptor();
             resultDesc.putString(s2t('result'), objectToJSON(result));

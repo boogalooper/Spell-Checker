@@ -56,6 +56,7 @@ MAX_TEXT_LENGTH = 500000
 DEBUG = False
 
 last_request_time = time.time()
+spell_check_lock = threading.Lock()
 
 ERROR_UNKNOWN_WORD = 1
 ERROR_REPEAT_WORD = 2
@@ -63,7 +64,6 @@ ERROR_CAPITALIZATION = 3
 ERROR_TOO_MANY_ERRORS = 4
 
 EXCEPTIONS_BASE_STATIC = set()
-EXCEPTIONS_BASE = set()
 MORPH = pymorphy3.MorphAnalyzer()
 CYRILLIC_WORD_RE = re.compile(r"[А-Яа-яЁё]+(?:-[А-Яа-яЁё]+)*")
 
@@ -102,7 +102,7 @@ def read_words_file(path: str) -> set:
 
 
 def load_exceptions_base():
-    global EXCEPTIONS_BASE_STATIC, EXCEPTIONS_BASE
+    global EXCEPTIONS_BASE_STATIC
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -116,25 +116,23 @@ def load_exceptions_base():
     for path in paths:
         if os.path.exists(path):
             EXCEPTIONS_BASE_STATIC = read_words_file(path)
-            EXCEPTIONS_BASE = set(EXCEPTIONS_BASE_STATIC)
             if DEBUG:
                 print(f"[INFO] Exceptions loaded: {len(EXCEPTIONS_BASE_STATIC)} from {path}")
             return
 
-    EXCEPTIONS_BASE = set()
     print("[INFO] exceptions_base.txt not found, continuing with empty set")
 
 
-def refresh_exceptions_for_request(user_dictionary_path: str = ""):
-    global EXCEPTIONS_BASE
-
-    EXCEPTIONS_BASE = set(EXCEPTIONS_BASE_STATIC)
+def build_exceptions_for_request(user_dictionary_path: str = "") -> set:
+    exceptions = set(EXCEPTIONS_BASE_STATIC)
 
     user_words = read_words_file(user_dictionary_path)
     if user_words:
-        EXCEPTIONS_BASE.update(user_words)
+        exceptions.update(user_words)
         if DEBUG:
             print(f"[DEBUG] User dictionary loaded: {len(user_words)} from {user_dictionary_path}")
+
+    return exceptions
 
 
 def extract_user_dictionary_path(message) -> str:
@@ -361,7 +359,7 @@ def receive_full_json(client_socket):
     return bytes(buffer)
 
 def check_spelling_yandex(text, user_dictionary_path=""):
-    refresh_exceptions_for_request(user_dictionary_path)
+    exceptions_base = build_exceptions_for_request(user_dictionary_path)
 
     if DEBUG and user_dictionary_path:
         print(f"[DEBUG] User dictionary path: {user_dictionary_path}")
@@ -464,7 +462,7 @@ def check_spelling_yandex(text, user_dictionary_path=""):
 
             key = normalize_word(word)
 
-            if key in EXCEPTIONS_BASE:
+            if key in exceptions_base:
                 continue
 
             suggestion = suggestions[0] if suggestions else ""
@@ -518,7 +516,7 @@ def send_data_to_jsx(obj):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(10)
             s.connect((API_HOST, API_PORT_SEND))
-            s.send(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+            s.sendall(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
     except Exception:
         pass
 
@@ -539,15 +537,25 @@ def handle_client(client_socket, server):
                 send_data_to_jsx({"type": "answer", "message": "success"})
 
             elif msg_type == "spell_check":
-                text = message.get("message", "")
-                user_dictionary_path = extract_user_dictionary_path(message)
-                result = check_spelling_yandex(text, user_dictionary_path)
-                if DEBUG:
-                    print("[DEBUG] Result:", result)
-                send_data_to_jsx({
-                    "type": "answer",
-                    "message": result
-                })
+                if not spell_check_lock.acquire(blocking=False):
+                    send_data_to_jsx({
+                        "type": "error",
+                        "message": "Spell check is busy"
+                    })
+                    return
+
+                try:
+                    text = message.get("message", "")
+                    user_dictionary_path = extract_user_dictionary_path(message)
+                    result = check_spelling_yandex(text, user_dictionary_path)
+                    if DEBUG:
+                        print("[DEBUG] Result:", result)
+                    send_data_to_jsx({
+                        "type": "answer",
+                        "message": result
+                    })
+                finally:
+                    spell_check_lock.release()
 
             elif msg_type == "exit":
                 try:
