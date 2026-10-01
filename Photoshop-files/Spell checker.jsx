@@ -15,7 +15,7 @@ const ver = 0.13,
     API_PORT_LISTEN = 6411,
     API_FILE = 'spell-checker',
     USER_DICTIONARY_FILE = 'spell-checker-user-dictionary.txt',
-    INIT_DELAY = 60000,
+    INIT_DELAY = 600000,
     DETECTION_DELAY = 60000,
     PROGRESS_DELAY = 2500,
     PING_DELAY = 1000,
@@ -311,7 +311,7 @@ function pyApi(apiHost, portSend, portListen, apiFile) {
             if (!f || !f.exists) {
                 throw new Error(toLocaleString(str.errModule));
             }
-            f.execute();
+            jazzyStartPython(f);
             result = sendMessage({}, INIT_DELAY, false, true, str.starting);
             if (!result) {
                 throw new Error(toLocaleString(str.errConnection));
@@ -908,5 +908,25 @@ function dialog(UUID) {
             }
         }
         return null;
+    }
+}
+
+// Shared launcher is created by install_runtime.bat inside SharedRuntime.
+function jazzyStartPython(moduleFile) {
+    if ($.os.toLowerCase().indexOf('windows') < 0) return moduleFile.execute();
+    var local = $.getenv('LOCALAPPDATA');
+    if (!local) return moduleFile.execute();
+    var root = local + '/JazzyScripts/SharedRuntime';
+    if (!new Folder(root + '/venv').exists) return moduleFile.execute();
+    var python = new File(root + '/venv/Scripts/pythonw.exe');
+    var launcher = new File(root + '/launcher.vbs');
+    if (!python.exists || !launcher.exists)
+        throw new Error('Shared Python is incomplete. Run install_runtime.bat.');
+    var previous = $.getenv('JAZZYSCRIPTS_SERVER');
+    try {
+        $.setenv('JAZZYSCRIPTS_SERVER', moduleFile.fsName);
+        return launcher.execute();
+    } finally {
+        $.setenv('JAZZYSCRIPTS_SERVER', previous || '');
     }
 }
